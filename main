@@ -1,0 +1,92 @@
+
+import pandas as pd
+import numpy as np
+import tensorflow as tf
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import classification_report, roc_auc_score
+from transformers import BertTokenizer, TFBertModel
+
+# Generate synthetic data (structured data)
+np.random.seed(42)
+n_samples = 1000
+structured_data = pd.DataFrame({
+    'age': np.random.randint(30, 80, n_samples),
+    'cholesterol': np.random.randint(150, 300, n_samples),
+    'blood_pressure': np.random.randint(90, 180, n_samples),
+    'smoking_status': np.random.randint(0, 2, n_samples),
+    'label': np.random.randint(0, 2, n_samples)  # 0: low risk, 1: high risk
+})
+
+# Sample unstructured text data (simulated)
+text_data = [
+    "Patient reports chest pain and has a family history of heart disease.",
+    "No significant symptoms; normal blood pressure and cholesterol.",
+    "History of smoking, elevated cholesterol, and occasional dizziness.",
+    "Healthy lifestyle, exercises regularly, no major health concerns."
+] * (n_samples // 4)
+
+structured_features = ['age', 'cholesterol', 'blood_pressure', 'smoking_status']
+X_structured = structured_data[structured_features]
+y = structured_data['label']
+
+# Tokenizer for BERT
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+# Tokenize text data
+max_len = 50
+X_text = tokenizer(
+    text_data,
+    padding='max_length',
+    truncation=True,
+    max_length=max_len,
+    return_tensors='tf'
+)
+
+# Convert tensors to NumPy arrays
+X_text_input_ids = X_text['input_ids'].numpy()
+
+# Split data into training and test sets
+X_train_structured, X_test_structured, X_train_text, X_test_text, y_train, y_test = train_test_split(
+    X_structured, X_text_input_ids, y, test_size=0.2, random_state=42
+)
+
+# Standardize structured data
+scaler = StandardScaler()
+X_train_structured = scaler.fit_transform(X_train_structured)
+X_test_structured = scaler.transform(X_test_structured)
+
+# Model definition
+structured_input = tf.keras.layers.Input(shape=(len(structured_features),), name='structured_input')
+text_input = tf.keras.layers.Input(shape=(max_len,), dtype=tf.int32, name='text_input')
+
+# BERT model for text input
+bert_model = TFBertModel.from_pretrained('bert-base-uncased')
+bert_output = bert_model(text_input).last_hidden_state
+pooled_output = tf.keras.layers.GlobalAveragePooling1D()(bert_output)
+
+# Dense layers for structured input
+x_structured = tf.keras.layers.Dense(32, activation='relu')(structured_input)
+x_structured = tf.keras.layers.Dense(16, activation='relu')(x_structured)
+
+# Combine structured and text features
+combined = tf.keras.layers.concatenate([x_structured, pooled_output])
+output = tf.keras.layers.Dense(1, activation='sigmoid')(combined)
+
+# Build and compile the model
+model = tf.keras.Model(inputs=[structured_input, text_input], outputs=output)
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+# Train the model
+history = model.fit(
+    [X_train_structured, X_train_text], y_train,
+    validation_data=([X_test_structured, X_test_text], y_test),
+    epochs=5,
+    batch_size=16
+)
+
+# Evaluate the model
+predictions = model.predict([X_test_structured, X_test_text]) > 0.5
+print("Classification Report:")
+print(classification_report(y_test, predictions))
+print(f"ROC-AUC Score: {roc_auc_score(y_test, predictions)}")
